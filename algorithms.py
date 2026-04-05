@@ -143,15 +143,13 @@ def _reconstruct_mm_path(meeting_hash, parent_f, parent_b):
 
 def mm(grid_map, start, goal, epsilon=1):
     """
-    Meet-in-the-Middle bidirectional heuristic search, closer to the lecture pseudocode.
+    MM written closer to the professor's pseudocode style:
 
-    Uses:
-        p(n) = max(f(n), 2g(n))
-
-    Returns:
-        path: list of State objects from start to goal
-        cost: optimal path cost
-        expansions: total node expansions across both directions
+    - OPEN_f / OPEN_b are heaps
+    - CLOSED_f / CLOSED_b are dictionaries of discovered states
+      storing best-known g and parent
+    - nodes are added to CLOSED when discovered, not only when expanded
+    - better paths update CLOSED and reinsert into OPEN
     """
     start_hash = start.state_hash()
     goal_hash = goal.state_hash()
@@ -159,29 +157,21 @@ def mm(grid_map, start, goal, epsilon=1):
     if start_hash == goal_hash:
         return [State(start.get_x(), start.get_y())], 0, 0
 
-    # OPEN heaps store tuples: (p, f, g, state_hash)
     open_f = []
     open_b = []
 
-    # Best known g-values in each direction
-    g_f = {start_hash: 0}
-    g_b = {goal_hash: 0}
+    # CLOSED now means "discovered record table", not strict expanded set
+    closed_f = {
+        start_hash: {"g": 0, "parent": None}
+    }
+    closed_b = {
+        goal_hash: {"g": 0, "parent": None}
+    }
 
-    # Parent pointers
-    parent_f = {start_hash: None}
-    parent_b = {goal_hash: None}
-
-    # CLOSED dictionaries: store expanded states and their g-values
-    # This makes "if n in CLOSED then use CLOSED[n].g" match the pseudocode more closely.
-    closed_f = {}
-    closed_b = {}
-
-    # Initial forward state
     f_start = manhattan(start, goal)
     p_start = max(f_start, 0)
     heapq.heappush(open_f, (p_start, f_start, 0, start_hash))
 
-    # Initial backward state
     f_goal = manhattan(goal, start)
     p_goal = max(f_goal, 0)
     heapq.heappush(open_b, (p_goal, f_goal, 0, goal_hash))
@@ -190,21 +180,23 @@ def mm(grid_map, start, goal, epsilon=1):
     meeting_hash = None
     expansions = 0
 
-    def peek_valid(heap, g_dir):
-        """
-        Return the best valid (p, f, g, hash) from a heap without removing it.
-        Discards stale entries.
-        """
+    def peek_valid(heap, closed_dir):
         while heap:
             p, f, g, hsh = heap[0]
-            if g == g_dir.get(hsh, float("inf")):
+            record = closed_dir.get(hsh)
+            if record is not None and g == record["g"]:
                 return p, f, g, hsh
             heapq.heappop(heap)
         return float("inf"), float("inf"), float("inf"), None
 
+    def reconstruct_from_closed(meet_hash):
+        parent_f = {h: rec["parent"] for h, rec in closed_f.items()}
+        parent_b = {h: rec["parent"] for h, rec in closed_b.items()}
+        return _reconstruct_mm_path(meet_hash, parent_f, parent_b)
+
     while open_f and open_b:
-        p_min_f, f_min_f, g_min_f, _ = peek_valid(open_f, g_f)
-        p_min_b, f_min_b, g_min_b, _ = peek_valid(open_b, g_b)
+        p_min_f, f_min_f, g_min_f, _ = peek_valid(open_f, closed_f)
+        p_min_b, f_min_b, g_min_b, _ = peek_valid(open_b, closed_b)
 
         lower_bound = max(
             g_min_f + g_min_b + epsilon,
@@ -213,48 +205,50 @@ def mm(grid_map, start, goal, epsilon=1):
             min(p_min_f, p_min_b),
         )
 
-        # Stopping condition from the lecture pseudocode/slides. :contentReference[oaicite:1]{index=1}
         if U <= lower_bound:
             if meeting_hash is None:
                 return None, -1, expansions
-            path = _reconstruct_mm_path(meeting_hash, parent_f, parent_b)
-            return path, U, expansions
+            return reconstruct_from_closed(meeting_hash), U, expansions
 
         expand_forward = p_min_f <= p_min_b
 
         if expand_forward:
             p_cur, f_cur, g_cur, cur_hash = heapq.heappop(open_f)
+            record = closed_f.get(cur_hash)
 
-            # stale entry
-            if g_cur != g_f.get(cur_hash, float("inf")):
+            if record is None or g_cur != record["g"]:
                 continue
+
+            expansions += 1
 
             current = _make_state_from_hash(cur_hash)
             current.set_g(g_cur)
-
-            # Add current to CLOSED_f
-            closed_f[cur_hash] = g_cur
-            expansions += 1
 
             for neighbor in grid_map.successors(current):
                 n_hash = neighbor.state_hash()
                 new_g = neighbor.get_g()
 
-                # If neighbor is in opposite CLOSED, update upper bound U
+                # If seen by backward search, update U
                 if n_hash in closed_b:
-                    candidate = new_g + closed_b[n_hash]
+                    candidate = new_g + closed_b[n_hash]["g"]
                     if candidate < U:
                         U = candidate
                         meeting_hash = n_hash
 
-                # If better path found, update/reopen
-                if new_g < g_f.get(n_hash, float("inf")):
-                    g_f[n_hash] = new_g
-                    parent_f[n_hash] = cur_hash
+                # If already discovered forward and better path found, update it
+                if n_hash in closed_f:
+                    if new_g < closed_f[n_hash]["g"]:
+                        closed_f[n_hash]["g"] = new_g
+                        closed_f[n_hash]["parent"] = cur_hash
 
-                    # Reopen if it had previously been closed
-                    if n_hash in closed_f:
-                        del closed_f[n_hash]
+                        n_state = _make_state_from_hash(n_hash)
+                        f_val = new_g + manhattan(n_state, goal)
+                        p_val = max(f_val, 2 * new_g)
+                        heapq.heappush(open_f, (p_val, f_val, new_g, n_hash))
+
+                else:
+                    # First discovery
+                    closed_f[n_hash] = {"g": new_g, "parent": cur_hash}
 
                     n_state = _make_state_from_hash(n_hash)
                     f_val = new_g + manhattan(n_state, goal)
@@ -263,37 +257,41 @@ def mm(grid_map, start, goal, epsilon=1):
 
         else:
             p_cur, f_cur, g_cur, cur_hash = heapq.heappop(open_b)
+            record = closed_b.get(cur_hash)
 
-            # stale entry
-            if g_cur != g_b.get(cur_hash, float("inf")):
+            if record is None or g_cur != record["g"]:
                 continue
+
+            expansions += 1
 
             current = _make_state_from_hash(cur_hash)
             current.set_g(g_cur)
-
-            # Add current to CLOSED_b
-            closed_b[cur_hash] = g_cur
-            expansions += 1
 
             for neighbor in grid_map.successors(current):
                 n_hash = neighbor.state_hash()
                 new_g = neighbor.get_g()
 
-                # If neighbor is in opposite CLOSED, update upper bound U
+                # If seen by forward search, update U
                 if n_hash in closed_f:
-                    candidate = new_g + closed_f[n_hash]
+                    candidate = new_g + closed_f[n_hash]["g"]
                     if candidate < U:
                         U = candidate
                         meeting_hash = n_hash
 
-                # If better path found, update/reopen
-                if new_g < g_b.get(n_hash, float("inf")):
-                    g_b[n_hash] = new_g
-                    parent_b[n_hash] = cur_hash
+                # If already discovered backward and better path found, update it
+                if n_hash in closed_b:
+                    if new_g < closed_b[n_hash]["g"]:
+                        closed_b[n_hash]["g"] = new_g
+                        closed_b[n_hash]["parent"] = cur_hash
 
-                    # Reopen if it had previously been closed
-                    if n_hash in closed_b:
-                        del closed_b[n_hash]
+                        n_state = _make_state_from_hash(n_hash)
+                        f_val = new_g + manhattan(n_state, start)
+                        p_val = max(f_val, 2 * new_g)
+                        heapq.heappush(open_b, (p_val, f_val, new_g, n_hash))
+
+                else:
+                    # First discovery
+                    closed_b[n_hash] = {"g": new_g, "parent": cur_hash}
 
                     n_state = _make_state_from_hash(n_hash)
                     f_val = new_g + manhattan(n_state, start)
@@ -301,7 +299,6 @@ def mm(grid_map, start, goal, epsilon=1):
                     heapq.heappush(open_b, (p_val, f_val, new_g, n_hash))
 
     if meeting_hash is not None:
-        path = _reconstruct_mm_path(meeting_hash, parent_f, parent_b)
-        return path, U, expansions
+        return reconstruct_from_closed(meeting_hash), U, expansions
 
     return None, -1, expansions
