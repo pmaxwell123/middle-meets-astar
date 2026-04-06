@@ -1,8 +1,20 @@
 import csv
 from collections import defaultdict
 
+import matplotlib.pyplot as plt
+
 
 INPUT_CSV = "results.csv"
+
+FAMILIES = ["open", "bottleneck", "maze", "deceptive"]
+
+DOVETAIL_RATIOS = [
+    (1, 1),
+    (2, 1),
+    (1, 2),
+    (3, 1),
+    (1, 3),
+]
 
 
 def safe_float(numerator, denominator):
@@ -24,6 +36,19 @@ def load_results(csv_path=INPUT_CSV):
             row["mm_expansions"] = int(row["mm_expansions"])
             row["cost_match"] = row["cost_match"] == "True"
             row["solvable_match"] = row["solvable_match"] == "True"
+
+            # Optional columns from main.py
+            if "expansion_diff" in row:
+                row["expansion_diff"] = None if row["expansion_diff"] == "" else int(row["expansion_diff"])
+            if "expansion_ratio" in row:
+                row["expansion_ratio"] = None if row["expansion_ratio"] == "" else float(row["expansion_ratio"])
+
+            for astar_budget, mm_budget in DOVETAIL_RATIOS:
+                ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+                row[f"{ratio_name}_winner"] = row[f"{ratio_name}_winner"]
+                row[f"{ratio_name}_rounds"] = int(row[f"{ratio_name}_rounds"])
+                row[f"{ratio_name}_total_expansions"] = int(row[f"{ratio_name}_total_expansions"])
+
             rows.append(row)
     return rows
 
@@ -167,7 +192,7 @@ def print_per_map_details(rows):
     for row in rows:
         grouped[row["family"]].append(row)
 
-    for family in ["open", "bottleneck", "maze"]:
+    for family in FAMILIES:
         if family not in grouped:
             continue
 
@@ -191,6 +216,123 @@ def print_per_map_details(rows):
             )
 
 
+def plot_average_expansions_by_family(rows):
+    strategies = ["A*", "MM"] + [f"Dovetail {a}:{m}" for a, m in DOVETAIL_RATIOS]
+    family_to_values = {family: [] for family in FAMILIES}
+
+    for family in FAMILIES:
+        family_rows = [
+            row for row in rows
+            if row["family"] == family and row["astar_cost"] != -1 and row["mm_cost"] != -1
+        ]
+
+        avg_astar = safe_float(
+            sum(row["astar_expansions"] for row in family_rows),
+            len(family_rows)
+        )
+        avg_mm = safe_float(
+            sum(row["mm_expansions"] for row in family_rows),
+            len(family_rows)
+        )
+
+        values = [avg_astar, avg_mm]
+
+        for astar_budget, mm_budget in DOVETAIL_RATIOS:
+            ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+            valid_totals = [
+                row[f"{ratio_name}_total_expansions"]
+                for row in family_rows
+                if row[f"{ratio_name}_total_expansions"] != -1
+            ]
+            avg_dovetail = safe_float(sum(valid_totals), len(valid_totals))
+            values.append(avg_dovetail)
+
+        family_to_values[family] = values
+
+    x = list(range(len(FAMILIES)))
+    width = 0.11
+
+    plt.figure()
+    for i, strategy in enumerate(strategies):
+        y = [family_to_values[family][i] for family in FAMILIES]
+        offset = (i - (len(strategies) - 1) / 2) * width
+        plt.bar([pos + offset for pos in x], y, width=width, label=strategy)
+
+    plt.xticks(x, FAMILIES)
+    plt.ylabel("Average node expansions")
+    plt.xlabel("Map family")
+    plt.title("Average node expansions by strategy and map family")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_best_dovetail_ratio_per_family(rows):
+    for family in FAMILIES:
+        family_rows = [
+            row for row in rows
+            if row["family"] == family and row["astar_cost"] != -1 and row["mm_cost"] != -1
+        ]
+
+        ratio_labels = [f"{a}:{m}" for a, m in DOVETAIL_RATIOS]
+        best_counts = {label: 0 for label in ratio_labels}
+
+        for row in family_rows:
+            best_ratio = None
+            best_total = float("inf")
+
+            for astar_budget, mm_budget in DOVETAIL_RATIOS:
+                ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+                total = row[f"{ratio_name}_total_expansions"]
+
+                if total != -1 and total < best_total:
+                    best_total = total
+                    best_ratio = f"{astar_budget}:{mm_budget}"
+
+            if best_ratio is not None:
+                best_counts[best_ratio] += 1
+
+        plt.figure()
+        plt.bar(list(best_counts.keys()), list(best_counts.values()))
+        plt.xlabel("Dovetail ratio (A*:MM)")
+        plt.ylabel("Number of maps where ratio was best")
+        plt.title(f"Best simulated dovetail ratio by map ({family})")
+        plt.tight_layout()
+        plt.show()
+
+
+def plot_per_map_boxplot(rows):
+    for family in FAMILIES:
+        family_rows = [
+            row for row in rows
+            if row["family"] == family and row["astar_cost"] != -1 and row["mm_cost"] != -1
+        ]
+
+        data = [
+            [row["astar_expansions"] for row in family_rows],
+            [row["mm_expansions"] for row in family_rows],
+        ]
+        labels = ["A*", "MM"]
+
+        for astar_budget, mm_budget in DOVETAIL_RATIOS:
+            ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+            ratio_data = [
+                row[f"{ratio_name}_total_expansions"]
+                for row in family_rows
+                if row[f"{ratio_name}_total_expansions"] != -1
+            ]
+            data.append(ratio_data)
+            labels.append(f"{astar_budget}:{mm_budget}")
+
+        plt.figure()
+        plt.boxplot(data, tick_labels=labels)
+        plt.ylabel("Node expansions")
+        plt.title(f"Distribution of expansions by strategy ({family})")
+        plt.xticks(rotation=30)
+        plt.tight_layout()
+        plt.show()
+
+
 def main():
     rows = load_results(INPUT_CSV)
 
@@ -200,12 +342,16 @@ def main():
 
     print_overall_summary(rows)
 
-    for family in ["open", "bottleneck", "maze"]:
+    for family in FAMILIES:
         summary = summarize_family(rows, family)
         if summary["maps_tested"] > 0:
             print_family_summary(summary)
 
     print_per_map_details(rows)
+
+    plot_average_expansions_by_family(rows)
+    plot_best_dovetail_ratio_per_family(rows)
+    plot_per_map_boxplot(rows)
 
 
 if __name__ == "__main__":

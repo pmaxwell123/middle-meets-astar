@@ -30,7 +30,15 @@ DECEPTIVE_DETOUR_MAX = 4.50
 
 
 def empty_grid(width, height, fill="."):
-    return [[fill for _ in range(width)] for _ in range(height)]
+    grid = []
+
+    for _ in range(height):
+        row = []
+        for _ in range(width):
+            row.append(fill)
+        grid.append(row)
+
+    return grid
 
 
 def add_border_walls(grid):
@@ -75,6 +83,9 @@ def find_symbol(grid, symbol):
 
 
 def is_solvable(grid):
+    """
+    Runs BFS to check if grid is solvable
+    """
     start = find_symbol(grid, "S")
     goal = find_symbol(grid, "G")
     if start is None or goal is None:
@@ -238,15 +249,11 @@ def generate_bottleneck_environment(width=WIDTH, height=HEIGHT):
     grid = empty_grid(width, height)
     add_border_walls(grid)
 
-    # Start open
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            grid[y][x] = "."
-
     # Place a major vertical or horizontal separator
     orientation = random.choice(["vertical", "horizontal"])
 
     if orientation == "vertical":
+        # Putting the wall roughly near the middle gives two meaningful sides
         wall_x = random.randint(width // 3, 2 * width // 3)
 
         for y in range(1, height - 1):
@@ -255,16 +262,19 @@ def generate_bottleneck_environment(width=WIDTH, height=HEIGHT):
         gap_count = random.choice([1, 2])
 
         if gap_count == 1:
+            # Choose one row somewhere not too close to the border
             gap_positions = [random.randint(2, height - 3)]
         else:
+            # Put two gaps that are far apart
             top_gap = random.randint(2, height // 3)
             bottom_gap = random.randint(2 * height // 3, height - 3)
             gap_positions = [top_gap, bottom_gap]
 
         for gy in gap_positions:
+            # Makes a crossing point
             grid[gy][wall_x] = "."
 
-            # small opening region around the crossing
+            # Makes a 3x3 open patch centered at the gap, as long as it stays inside the interior
             for dy in [-1, 0, 1]:
                 ny = gy + dy
                 if 1 <= ny < height - 1:
@@ -273,7 +283,7 @@ def generate_bottleneck_environment(width=WIDTH, height=HEIGHT):
                         if 1 <= nx < width - 1:
                             grid[ny][nx] = "."
 
-        # light clutter away from separator
+        # Light clutter away from separator
         for y in range(1, height - 1):
             for x in range(1, width - 1):
                 if abs(x - wall_x) <= 1:
@@ -325,22 +335,19 @@ def generate_maze_environment(width=WIDTH, height=HEIGHT):
     grid = empty_grid(width, height, fill="#")
     add_border_walls(grid)
 
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            grid[y][x] = "#"
-
     # Carve a network of corridors via random waypoints
-    waypoints = [
-        (random.randint(1, width - 2), random.randint(1, height - 2))
-        for _ in range(7)
-    ]
+    waypoints = []
+    for _ in range(7):
+        x = random.randint(1, width - 2)
+        y = random.randint(1, height - 2)
+        waypoints.append((x, y))
 
     for i in range(len(waypoints) - 1):
         x1, y1 = waypoints[i]
         x2, y2 = waypoints[i + 1]
         carve_corridor(grid, x1, y1, x2, y2)
 
-    # Add some extra branches
+    # Add some extra branches to create little dead ends or side corridors
     open_cells = interior_open_cells(grid)
     if open_cells:
         for bx, by in random.sample(open_cells, min(len(open_cells), 20)):
@@ -375,12 +382,8 @@ def generate_deceptive_environment(width=WIDTH, height=HEIGHT):
     grid = empty_grid(width, height)
     add_border_walls(grid)
 
-    # Start with open interior
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            grid[y][x] = "."
-
-    pattern_count = random.randint(3, 5)
+    # Each map gets between 10 and 15 obstacle patterns
+    pattern_count = random.randint(10, 15)
 
     for _ in range(pattern_count):
         pattern = random.choice(["long_wall", "u_shape", "box_with_gap"])
@@ -458,13 +461,13 @@ def generate_deceptive_environment(width=WIDTH, height=HEIGHT):
                 gy = random.choice([top + 1, top + h - 2])
                 grid[gy][left + w - 1] = "."
 
-    # light background clutter
+    # Light background clutter
     for y in range(1, height - 1):
         for x in range(1, width - 1):
             if grid[y][x] == "." and random.random() < 0.04:
                 grid[y][x] = "#"
 
-    # reopen a few random cells so clutter does not overblock
+    # Reopen a few random cells so clutter does not overblock
     add_random_openings(grid, count=(width * height) // 22)
 
     return grid

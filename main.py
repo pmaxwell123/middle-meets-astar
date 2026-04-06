@@ -1,5 +1,6 @@
 import csv
 import os
+import math
 
 from grid_map import GridMap
 from algorithms import astar, mm
@@ -9,6 +10,52 @@ MAP_ROOT = "maps"
 OUTPUT_CSV = "results.csv"
 FAMILIES = ["open", "bottleneck", "maze", "deceptive"]
 
+DOVETAIL_RATIOS = [
+    (1, 1),
+    (2, 1),
+    (1, 2),
+    (3, 1),
+    (1, 3),
+]
+
+
+def simulate_dovetail_from_finished_runs(astar_expansions, mm_expansions, astar_budget, mm_budget):
+    """
+    Post hoc simulated dovetailing.
+
+    We do not truly interleave the searches. Instead, we use each algorithm's
+    standalone expansion count and ask which one would finish first if each
+    round allocated:
+        astar_budget expansions to A*
+        mm_budget expansions to MM
+    """
+    if astar_expansions == -1 and mm_expansions == -1:
+        return {
+            "winner": "n/a",
+            "rounds": -1,
+            "total_expansions": -1,
+        }
+
+    astar_rounds = math.inf if astar_expansions == -1 else math.ceil(astar_expansions / astar_budget)
+    mm_rounds = math.inf if mm_expansions == -1 else math.ceil(mm_expansions / mm_budget)
+
+    if astar_rounds < mm_rounds:
+        winner = "A*"
+        rounds = astar_rounds
+    elif mm_rounds < astar_rounds:
+        winner = "MM"
+        rounds = mm_rounds
+    else:
+        winner = "tie"
+        rounds = astar_rounds
+
+    total_expansions = rounds * (astar_budget + mm_budget)
+
+    return {
+        "winner": winner,
+        "rounds": rounds,
+        "total_expansions": total_expansions,
+    }
 
 def iter_map_files(root=MAP_ROOT):
     """
@@ -45,6 +92,28 @@ def run_single_map(map_path):
     goal_m = map_m.get_goal()
 
     path_m, cost_m, expansions_m = mm(map_m, start_m, goal_m, epsilon=1)
+
+    dovetail_results = {}
+
+    if path_a is not None or path_m is not None:
+        for astar_budget, mm_budget in DOVETAIL_RATIOS:
+            sim = simulate_dovetail_from_finished_runs(
+                expansions_a,
+                expansions_m,
+                astar_budget,
+                mm_budget,
+            )
+
+            ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+            dovetail_results[f"{ratio_name}_winner"] = sim["winner"]
+            dovetail_results[f"{ratio_name}_rounds"] = sim["rounds"]
+            dovetail_results[f"{ratio_name}_total_expansions"] = sim["total_expansions"]
+    else:
+        for astar_budget, mm_budget in DOVETAIL_RATIOS:
+            ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+            dovetail_results[f"{ratio_name}_winner"] = "n/a"
+            dovetail_results[f"{ratio_name}_rounds"] = -1
+            dovetail_results[f"{ratio_name}_total_expansions"] = -1
 
     cost_match = cost_a == cost_m
     solvable_match = (
@@ -84,6 +153,7 @@ def run_single_map(map_path):
         "expansion_diff": expansion_diff,
         "expansion_ratio": expansion_ratio,
         "winner": winner,
+        **dovetail_results,
     }
 
     return result
@@ -120,6 +190,18 @@ def print_result_row(family, filename, result):
             f"MM - A* expansion diff: {result['expansion_diff']} | "
             f"MM/A* ratio: {ratio_text}"
         )
+    
+    print("Simulated dovetailing:")
+    for astar_budget, mm_budget in DOVETAIL_RATIOS:
+        ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+        winner = result[f"{ratio_name}_winner"]
+        rounds = result[f"{ratio_name}_rounds"]
+        total_expansions = result[f"{ratio_name}_total_expansions"]
+
+        print(
+            f"  A*:MM = {astar_budget}:{mm_budget} | "
+            f"winner={winner}, rounds={rounds}, total_expansions={total_expansions}"
+        )
 
 
 def write_results_csv(rows, output_csv=OUTPUT_CSV):
@@ -142,6 +224,12 @@ def write_results_csv(rows, output_csv=OUTPUT_CSV):
         "expansion_ratio",
         "winner",
     ]
+
+    for astar_budget, mm_budget in DOVETAIL_RATIOS:
+        ratio_name = f"dovetail_{astar_budget}_{mm_budget}"
+        fieldnames.append(f"{ratio_name}_winner")
+        fieldnames.append(f"{ratio_name}_rounds")
+        fieldnames.append(f"{ratio_name}_total_expansions")
 
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
