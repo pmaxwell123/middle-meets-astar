@@ -6,7 +6,8 @@ from algorithms import astar, mm
 
 
 MAP_ROOT = "maps"
-OUTPUT_CSV = "results/results.csv"
+OUTPUT_CSV = "results.csv"
+FAMILIES = ["open", "bottleneck", "maze", "deceptive"]
 
 
 def iter_map_files(root=MAP_ROOT):
@@ -15,10 +16,9 @@ def iter_map_files(root=MAP_ROOT):
         maps/open
         maps/bottleneck
         maps/maze
+        maps/deceptive
     """
-    families = ["open", "bottleneck", "maze"]
-
-    for family in families:
+    for family in FAMILIES:
         family_dir = os.path.join(root, family)
         if not os.path.isdir(family_dir):
             continue
@@ -46,6 +46,31 @@ def run_single_map(map_path):
 
     path_m, cost_m, expansions_m = mm(map_m, start_m, goal_m, epsilon=1)
 
+    cost_match = cost_a == cost_m
+    solvable_match = (
+        (path_a is None and path_m is None)
+        or (path_a is not None and path_m is not None)
+    )
+
+    if path_a is not None and path_m is not None:
+        expansion_diff = expansions_m - expansions_a
+
+        if expansions_a > 0:
+            expansion_ratio = expansions_m / expansions_a
+        else:
+            expansion_ratio = None
+
+        if expansions_a < expansions_m:
+            winner = "A*"
+        elif expansions_m < expansions_a:
+            winner = "MM"
+        else:
+            winner = "tie"
+    else:
+        expansion_diff = None
+        expansion_ratio = None
+        winner = "n/a"
+
     result = {
         "map_path": map_path,
         "astar_path_length": len(path_a) if path_a is not None else 0,
@@ -54,8 +79,11 @@ def run_single_map(map_path):
         "mm_path_length": len(path_m) if path_m is not None else 0,
         "mm_cost": cost_m,
         "mm_expansions": expansions_m,
-        "cost_match": cost_a == cost_m,
-        "solvable_match": (path_a is None and path_m is None) or (path_a is not None and path_m is not None),
+        "cost_match": cost_match,
+        "solvable_match": solvable_match,
+        "expansion_diff": expansion_diff,
+        "expansion_ratio": expansion_ratio,
+        "winner": winner,
     }
 
     return result
@@ -81,6 +109,18 @@ def print_result_row(family, filename, result):
         f"Solvable match: {result['solvable_match']}"
     )
 
+    if result["winner"] != "n/a":
+        ratio_text = (
+            f"{result['expansion_ratio']:.3f}"
+            if result["expansion_ratio"] is not None
+            else "n/a"
+        )
+        print(
+            f"Winner: {result['winner']} | "
+            f"MM - A* expansion diff: {result['expansion_diff']} | "
+            f"MM/A* ratio: {ratio_text}"
+        )
+
 
 def write_results_csv(rows, output_csv=OUTPUT_CSV):
     """
@@ -98,6 +138,9 @@ def write_results_csv(rows, output_csv=OUTPUT_CSV):
         "mm_expansions",
         "cost_match",
         "solvable_match",
+        "expansion_diff",
+        "expansion_ratio",
+        "winner",
     ]
 
     with open(output_csv, "w", newline="", encoding="utf-8") as f:
@@ -108,15 +151,13 @@ def write_results_csv(rows, output_csv=OUTPUT_CSV):
 
 def print_summary(rows):
     """
-    Prints a simple aggregate summary by map family.
+    Prints an aggregate summary by map family.
     """
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
 
-    families = ["open", "bottleneck", "maze"]
-
-    for family in families:
+    for family in FAMILIES:
         family_rows = [row for row in rows if row["family"] == family]
         if not family_rows:
             continue
@@ -132,9 +173,27 @@ def print_summary(rows):
         if solvable_rows:
             avg_astar_exp = sum(row["astar_expansions"] for row in solvable_rows) / len(solvable_rows)
             avg_mm_exp = sum(row["mm_expansions"] for row in solvable_rows) / len(solvable_rows)
+
+            comparable_rows = [row for row in solvable_rows if row["winner"] != "n/a"]
+            a_wins = sum(1 for row in comparable_rows if row["winner"] == "A*")
+            mm_wins = sum(1 for row in comparable_rows if row["winner"] == "MM")
+            ties = sum(1 for row in comparable_rows if row["winner"] == "tie")
+
+            valid_ratio_rows = [
+                row for row in comparable_rows
+                if row["expansion_ratio"] is not None
+            ]
+            avg_ratio = (
+                sum(row["expansion_ratio"] for row in valid_ratio_rows) / len(valid_ratio_rows)
+                if valid_ratio_rows else 0
+            )
         else:
             avg_astar_exp = 0
             avg_mm_exp = 0
+            a_wins = 0
+            mm_wins = 0
+            ties = 0
+            avg_ratio = 0
 
         print(f"\nFamily: {family}")
         print(f"Maps tested: {len(family_rows)}")
@@ -142,6 +201,10 @@ def print_summary(rows):
         print(f"Solvable matches: {solvable_matches}/{len(family_rows)}")
         print(f"Average A* expansions (solvable only): {avg_astar_exp:.2f}")
         print(f"Average MM expansions (solvable only): {avg_mm_exp:.2f}")
+        print(f"A* fewer expansions: {a_wins}")
+        print(f"MM fewer expansions: {mm_wins}")
+        print(f"Ties: {ties}")
+        print(f"Average MM/A* expansion ratio: {avg_ratio:.3f}")
 
 
 def main():

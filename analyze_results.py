@@ -2,7 +2,7 @@ import csv
 from collections import defaultdict
 
 
-INPUT_CSV = "results/results.csv"
+INPUT_CSV = "results.csv"
 
 
 def safe_float(numerator, denominator):

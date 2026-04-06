@@ -3,13 +3,30 @@ import random
 from collections import deque
 
 
-WIDTH = 20
-HEIGHT = 20
+WIDTH = 40
+HEIGHT = 40
 SEED = 42
 
-OPEN_COUNT = 5
-BOTTLENECK_COUNT = 5
-MAZE_COUNT = 5
+OPEN_COUNT = 30
+BOTTLENECK_COUNT = 30
+MAZE_COUNT = 30
+DECEPTIVE_COUNT = 30
+
+MIN_START_GOAL_MANHATTAN = 10
+MAX_PAIR_SAMPLING_ATTEMPTS = 300
+MAX_MAP_ATTEMPTS = 500
+
+OPEN_DETOUR_MIN = 1.00
+OPEN_DETOUR_MAX = 1.20
+
+BOTTLENECK_DETOUR_MIN = 1.10
+BOTTLENECK_DETOUR_MAX = 2.20
+
+MAZE_DETOUR_MIN = 1.30
+MAZE_DETOUR_MAX = 4.00
+
+DECEPTIVE_DETOUR_MIN = 1.50
+DECEPTIVE_DETOUR_MAX = 4.50
 
 
 def empty_grid(width, height, fill="."):
@@ -40,6 +57,13 @@ def place_start_goal(grid, start, goal):
     gx, gy = goal
     grid[sy][sx] = "S"
     grid[gy][gx] = "G"
+
+
+def clear_start_goal(grid):
+    for y, row in enumerate(grid):
+        for x, cell in enumerate(row):
+            if cell in ("S", "G"):
+                grid[y][x] = "."
 
 
 def find_symbol(grid, symbol):
@@ -114,106 +138,43 @@ def ensure_dirs():
     os.makedirs("maps/open", exist_ok=True)
     os.makedirs("maps/bottleneck", exist_ok=True)
     os.makedirs("maps/maze", exist_ok=True)
+    os.makedirs("maps/deceptive", exist_ok=True)
 
 
-def clear_start_goal_cells(grid, start, goal):
-    sx, sy = start
-    gx, gy = goal
-    grid[sy][sx] = "."
-    grid[gy][gx] = "."
-
-
-def generate_open_map(width=WIDTH, height=HEIGHT):
-    """
-    Open maps:
-    - low obstacle density
-    - mostly direct routes
-    - a little randomness
-    """
-    grid = empty_grid(width, height)
-    add_border_walls(grid)
-
-    start = (1, 1)
-    goal = (width - 2, height - 2)
+def interior_open_cells(grid):
+    cells = []
+    height = len(grid)
+    width = len(grid[0])
 
     for y in range(1, height - 1):
         for x in range(1, width - 1):
-            if (x, y) in (start, goal):
-                continue
-            if random.random() < 0.08:
-                grid[y][x] = "#"
+            if grid[y][x] == ".":
+                cells.append((x, y))
 
-    # Clear a rough diagonal-ish corridor so open maps tend to remain easy
-    sx, sy = start
-    gx, gy = goal
-
-    for x in range(sx, gx + 1):
-        grid[sy][x] = "."
-
-    for y in range(sy, gy + 1):
-        grid[y][gx] = "."
-
-    place_start_goal(grid, start, goal)
-    return grid
+    return cells
 
 
-def generate_bottleneck_map(width=WIDTH, height=HEIGHT):
-    """
-    Bottleneck maps:
-    - large separating walls
-    - one forced crossing point
-    - often causes a real detour
-    """
-    grid = empty_grid(width, height)
-    add_border_walls(grid)
+def choose_start_goal(grid, min_manhattan=MIN_START_GOAL_MANHATTAN, attempts=MAX_PAIR_SAMPLING_ATTEMPTS):
+    cells = interior_open_cells(grid)
+    if len(cells) < 2:
+        return None, None
 
-    start = (2, 2)
-    goal = (width - 3, height - 3)
+    for _ in range(attempts):
+        start = random.choice(cells)
+        goal = random.choice(cells)
 
-    # Create a strong vertical wall barrier
-    wall_x = width // 2
+        if start == goal:
+            continue
 
-    for y in range(1, height - 1):
-        grid[y][wall_x] = "#"
+        if manhattan_distance(start, goal) < min_manhattan:
+            continue
 
-    # Put the single gap far from the straight-line route to force detour
-    possible_gap_rows = list(range(height // 2 + 2, height - 2))
-    gap_y = random.choice(possible_gap_rows)
-    grid[gap_y][wall_x] = "."
+        return start, goal
 
-    # Add light clutter on each side without blocking the main forced crossing
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            if x == wall_x:
-                continue
-            if (x, y) in (start, goal):
-                continue
-            if abs(y - gap_y) <= 1 and abs(x - wall_x) <= 2:
-                continue
-            if random.random() < 0.10:
-                grid[y][x] = "#"
-
-    # Clear access around the forced gap
-    for dx in [-2, -1, 0, 1, 2]:
-        nx = wall_x + dx
-        if 1 <= nx < width - 1:
-            grid[gap_y][nx] = "."
-
-    for dy in [-1, 0, 1]:
-        ny = gap_y + dy
-        if 1 <= ny < height - 1:
-            grid[ny][wall_x - 1] = "."
-            grid[ny][wall_x + 1] = "."
-
-    clear_start_goal_cells(grid, start, goal)
-    place_start_goal(grid, start, goal)
-    return grid
+    return None, None
 
 
 def carve_corridor(grid, x1, y1, x2, y2):
-    """
-    Carves an L-shaped corridor between two points.
-    """
     x, y = x1, y1
     grid[y][x] = "."
 
@@ -233,32 +194,145 @@ def carve_corridor(grid, x1, y1, x2, y2):
             grid[y][x] = "."
 
 
-def generate_maze_like_map(width=WIDTH, height=HEIGHT):
+def add_random_openings(grid, count):
+    height = len(grid)
+    width = len(grid[0])
+
+    for _ in range(count):
+        x = random.randint(1, width - 2)
+        y = random.randint(1, height - 2)
+        grid[y][x] = "."
+
+
+def add_random_blocks(grid, density):
+    height = len(grid)
+    width = len(grid[0])
+
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if random.random() < density:
+                grid[y][x] = "#"
+
+
+def generate_open_environment(width=WIDTH, height=HEIGHT):
     """
-    Maze-like maps:
-    - start from mostly blocked interior
-    - carve winding corridor segments
-    - add branches / dead ends
-    - produce more variable path lengths
+    Sparse random obstacles.
+    Usually heuristic-friendly, but start/goal are sampled later.
+    """
+    grid = empty_grid(width, height)
+    add_border_walls(grid)
+
+    add_random_blocks(grid, density=0.10)
+
+    # Light smoothing: clear some random cells to avoid cluttered ugliness
+    add_random_openings(grid, count=(width * height) // 15)
+
+    return grid
+
+
+def generate_bottleneck_environment(width=WIDTH, height=HEIGHT):
+    """
+    Two broad regions separated by a strong barrier with 1-2 narrow crossings.
+    Designed so some sampled pairs favor A* and some favor MM.
+    """
+    grid = empty_grid(width, height)
+    add_border_walls(grid)
+
+    # Start open
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            grid[y][x] = "."
+
+    # Place a major vertical or horizontal separator
+    orientation = random.choice(["vertical", "horizontal"])
+
+    if orientation == "vertical":
+        wall_x = random.randint(width // 3, 2 * width // 3)
+
+        for y in range(1, height - 1):
+            grid[y][wall_x] = "#"
+
+        gap_count = random.choice([1, 2])
+
+        if gap_count == 1:
+            gap_positions = [random.randint(2, height - 3)]
+        else:
+            top_gap = random.randint(2, height // 3)
+            bottom_gap = random.randint(2 * height // 3, height - 3)
+            gap_positions = [top_gap, bottom_gap]
+
+        for gy in gap_positions:
+            grid[gy][wall_x] = "."
+
+            # small opening region around the crossing
+            for dy in [-1, 0, 1]:
+                ny = gy + dy
+                if 1 <= ny < height - 1:
+                    for dx in [-1, 0, 1]:
+                        nx = wall_x + dx
+                        if 1 <= nx < width - 1:
+                            grid[ny][nx] = "."
+
+        # light clutter away from separator
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if abs(x - wall_x) <= 1:
+                    continue
+                if random.random() < 0.08:
+                    grid[y][x] = "#"
+
+    else:
+        wall_y = random.randint(height // 3, 2 * height // 3)
+
+        for x in range(1, width - 1):
+            grid[wall_y][x] = "#"
+
+        gap_count = random.choice([1, 2])
+
+        if gap_count == 1:
+            gap_positions = [random.randint(2, width - 3)]
+        else:
+            left_gap = random.randint(2, width // 3)
+            right_gap = random.randint(2 * width // 3, width - 3)
+            gap_positions = [left_gap, right_gap]
+
+        for gx in gap_positions:
+            grid[wall_y][gx] = "."
+
+            for dx in [-1, 0, 1]:
+                nx = gx + dx
+                if 1 <= nx < width - 1:
+                    for dy in [-1, 0, 1]:
+                        ny = wall_y + dy
+                        if 1 <= ny < height - 1:
+                            grid[ny][nx] = "."
+
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if abs(y - wall_y) <= 1:
+                    continue
+                if random.random() < 0.08:
+                    grid[y][x] = "#"
+
+    return grid
+
+
+def generate_maze_environment(width=WIDTH, height=HEIGHT):
+    """
+    Corridor-heavy environment with branches.
+    More likely to reduce Manhattan's usefulness.
     """
     grid = empty_grid(width, height, fill="#")
     add_border_walls(grid)
 
-    start = (1, 1)
-    goal = (width - 2, height - 2)
-
-    # Open all interior? No. Start from blocked and carve paths.
     for y in range(1, height - 1):
         for x in range(1, width - 1):
             grid[y][x] = "#"
 
-    # Main winding route through intermediate waypoints
+    # Carve a network of corridors via random waypoints
     waypoints = [
-        start,
-        (random.randint(2, width // 3), random.randint(height // 3, height - 4)),
-        (random.randint(width // 3, 2 * width // 3), random.randint(2, height // 2)),
-        (random.randint(2 * width // 3, width - 3), random.randint(height // 2, height - 3)),
-        goal,
+        (random.randint(1, width - 2), random.randint(1, height - 2))
+        for _ in range(7)
     ]
 
     for i in range(len(waypoints) - 1):
@@ -266,89 +340,237 @@ def generate_maze_like_map(width=WIDTH, height=HEIGHT):
         x2, y2 = waypoints[i + 1]
         carve_corridor(grid, x1, y1, x2, y2)
 
-    # Widen some corridor cells slightly and add side branches
-    open_cells = []
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            if grid[y][x] == ".":
-                open_cells.append((x, y))
+    # Add some extra branches
+    open_cells = interior_open_cells(grid)
+    if open_cells:
+        for bx, by in random.sample(open_cells, min(len(open_cells), 20)):
+            dx, dy = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+            length = random.randint(2, 6)
 
-    # Small widening to avoid a single rigid hallway everywhere
-    for x, y in random.sample(open_cells, min(len(open_cells), 20)):
-        for dx, dy in random.sample([(1, 0), (-1, 0), (0, 1), (0, -1)], 2):
-            nx, ny = x + dx, y + dy
-            if 1 <= nx < width - 1 and 1 <= ny < height - 1:
-                grid[ny][nx] = "."
+            x, y = bx, by
+            for _ in range(length):
+                x += dx
+                y += dy
+                if not (1 <= x < width - 1 and 1 <= y < height - 1):
+                    break
+                grid[y][x] = "."
 
-    # Add short dead-end branches
-    branch_starts = random.sample(open_cells, min(len(open_cells), 12))
-    for bx, by in branch_starts:
-        dx, dy = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
-        length = random.randint(2, 5)
+    # Slight widening here and there
+    open_cells = interior_open_cells(grid)
+    if open_cells:
+        for x, y in random.sample(open_cells, min(len(open_cells), 25)):
+            for dx, dy in random.sample([(1, 0), (-1, 0), (0, 1), (0, -1)], 2):
+                nx, ny = x + dx, y + dy
+                if 1 <= nx < width - 1 and 1 <= ny < height - 1:
+                    grid[ny][nx] = "."
 
-        x, y = bx, by
-        for _ in range(length):
-            x += dx
-            y += dy
-            if not (1 <= x < width - 1 and 1 <= y < height - 1):
-                break
-            grid[y][x] = "."
-
-    clear_start_goal_cells(grid, start, goal)
-    place_start_goal(grid, start, goal)
     return grid
 
 
-def generate_until_valid(generator, family_name, min_extra_detour=0, max_attempts=500):
+def generate_deceptive_environment(width=WIDTH, height=HEIGHT):
     """
-    Repeatedly generate until:
-    - map is solvable
-    - shortest path is at least Manhattan(start, goal) + min_extra_detour
+    Environments meant to make Manhattan misleading:
+    near-looking targets blocked by walls, U-shapes, and offset openings.
+    """
+    grid = empty_grid(width, height)
+    add_border_walls(grid)
+
+    # Start with open interior
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            grid[y][x] = "."
+
+    pattern_count = random.randint(3, 5)
+
+    for _ in range(pattern_count):
+        pattern = random.choice(["long_wall", "u_shape", "box_with_gap"])
+
+        if pattern == "long_wall":
+            orientation = random.choice(["horizontal", "vertical"])
+
+            if orientation == "horizontal":
+                y = random.randint(3, height - 4)
+                x1 = random.randint(2, width // 3)
+                x2 = random.randint(2 * width // 3, width - 3)
+
+                for x in range(x1, x2 + 1):
+                    grid[y][x] = "#"
+
+                # gap near one end, not near center
+                gap_x = random.choice([x1, x1 + 1, x2 - 1, x2])
+                grid[y][gap_x] = "."
+
+            else:
+                x = random.randint(3, width - 4)
+                y1 = random.randint(2, height // 3)
+                y2 = random.randint(2 * height // 3, height - 3)
+
+                for y in range(y1, y2 + 1):
+                    grid[y][x] = "#"
+
+                gap_y = random.choice([y1, y1 + 1, y2 - 1, y2])
+                grid[gap_y][x] = "."
+
+        elif pattern == "u_shape":
+            left = random.randint(2, width - 8)
+            top = random.randint(2, height - 8)
+            w = random.randint(4, 6)
+            h = random.randint(4, 6)
+            open_side = random.choice(["top", "bottom", "left", "right"])
+
+            if open_side != "top":
+                for x in range(left, left + w):
+                    grid[top][x] = "#"
+            if open_side != "bottom":
+                for x in range(left, left + w):
+                    grid[top + h - 1][x] = "#"
+            if open_side != "left":
+                for y in range(top, top + h):
+                    grid[y][left] = "#"
+            if open_side != "right":
+                for y in range(top, top + h):
+                    grid[y][left + w - 1] = "#"
+
+        else:  # box_with_gap
+            left = random.randint(2, width - 8)
+            top = random.randint(2, height - 8)
+            w = random.randint(4, 6)
+            h = random.randint(4, 6)
+
+            for x in range(left, left + w):
+                grid[top][x] = "#"
+                grid[top + h - 1][x] = "#"
+            for y in range(top, top + h):
+                grid[y][left] = "#"
+                grid[y][left + w - 1] = "#"
+
+            side = random.choice(["top", "bottom", "left", "right"])
+            if side == "top":
+                gx = random.choice([left + 1, left + w - 2])
+                grid[top][gx] = "."
+            elif side == "bottom":
+                gx = random.choice([left + 1, left + w - 2])
+                grid[top + h - 1][gx] = "."
+            elif side == "left":
+                gy = random.choice([top + 1, top + h - 2])
+                grid[gy][left] = "."
+            else:
+                gy = random.choice([top + 1, top + h - 2])
+                grid[gy][left + w - 1] = "."
+
+    # light background clutter
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if grid[y][x] == "." and random.random() < 0.04:
+                grid[y][x] = "#"
+
+    # reopen a few random cells so clutter does not overblock
+    add_random_openings(grid, count=(width * height) // 22)
+
+    return grid
+
+
+def classify_pair(grid, start, goal):
+    clear_start_goal(grid)
+    place_start_goal(grid, start, goal)
+
+    if not is_solvable(grid):
+        clear_start_goal(grid)
+        return None
+
+    sp = shortest_path_length(grid)
+    if sp == -1:
+        clear_start_goal(grid)
+        return None
+
+    md = manhattan_distance(start, goal)
+    if md == 0:
+        clear_start_goal(grid)
+        return None
+
+    ratio = sp / md
+    clear_start_goal(grid)
+
+    return {
+        "shortest_path": sp,
+        "manhattan": md,
+        "detour_ratio": ratio,
+    }
+
+
+def generate_until_valid(
+    environment_generator,
+    family_name,
+    detour_min,
+    detour_max,
+    max_attempts=MAX_MAP_ATTEMPTS,
+):
+    """
+    Generate an environment, then sample a start-goal pair whose
+    detour ratio falls in the family's target range.
     """
     for attempt in range(max_attempts):
-        if attempt % 50 == 0:
-            print(f"Generating {family_name}: attempt {attempt}")
 
-        grid = generator()
+        grid = environment_generator()
 
-        if not is_solvable(grid):
-            continue
-
-        start = find_symbol(grid, "S")
-        goal = find_symbol(grid, "G")
+        start, goal = choose_start_goal(grid)
         if start is None or goal is None:
             continue
 
-        base = manhattan_distance(start, goal)
-        sp = shortest_path_length(grid)
-
-        if sp == -1:
+        info = classify_pair(grid, start, goal)
+        if info is None:
             continue
 
-        if sp >= base + min_extra_detour:
+        ratio = info["detour_ratio"]
+
+        if detour_min <= ratio <= detour_max:
+            place_start_goal(grid, start, goal)
             return grid
 
-    raise RuntimeError(f"Failed to generate a valid {family_name} map after {max_attempts} attempts.")
+    raise RuntimeError(
+        f"Failed to generate a valid {family_name} map after {max_attempts} attempts."
+    )
 
 
 def main():
     random.seed(SEED)
     ensure_dirs()
 
-    # Open: usually near-direct paths
     for i in range(OPEN_COUNT):
-        grid = generate_until_valid(generate_open_map, "open", min_extra_detour=0)
+        grid = generate_until_valid(
+            generate_open_environment,
+            "open",
+            detour_min=OPEN_DETOUR_MIN,
+            detour_max=OPEN_DETOUR_MAX,
+        )
         save_grid(grid, f"maps/open/open_{i+1}.txt")
 
-    # Bottleneck: should often force at least some detour
     for i in range(BOTTLENECK_COUNT):
-        grid = generate_until_valid(generate_bottleneck_map, "bottleneck", min_extra_detour=2)
+        grid = generate_until_valid(
+            generate_bottleneck_environment,
+            "bottleneck",
+            detour_min=BOTTLENECK_DETOUR_MIN,
+            detour_max=BOTTLENECK_DETOUR_MAX,
+        )
         save_grid(grid, f"maps/bottleneck/bottleneck_{i+1}.txt")
 
-    # Maze-like: should typically force larger detours
     for i in range(MAZE_COUNT):
-        grid = generate_until_valid(generate_maze_like_map, "maze", min_extra_detour=4)
+        grid = generate_until_valid(
+            generate_maze_environment,
+            "maze",
+            detour_min=MAZE_DETOUR_MIN,
+            detour_max=MAZE_DETOUR_MAX,
+        )
         save_grid(grid, f"maps/maze/maze_{i+1}.txt")
+
+    for i in range(DECEPTIVE_COUNT):
+        grid = generate_until_valid(
+            generate_deceptive_environment,
+            "deceptive",
+            detour_min=DECEPTIVE_DETOUR_MIN,
+            detour_max=DECEPTIVE_DETOUR_MAX,
+        )
+        save_grid(grid, f"maps/deceptive/deceptive_{i+1}.txt")
 
     print("Maps generated.")
 

@@ -190,9 +190,15 @@ def mm(grid_map, start, goal, epsilon=1):
         return float("inf"), float("inf"), float("inf"), None
 
     def reconstruct_from_closed(meet_hash):
-        parent_f = {h: rec["parent"] for h, rec in closed_f.items()}
-        parent_b = {h: rec["parent"] for h, rec in closed_b.items()}
-        return _reconstruct_mm_path(meet_hash, parent_f, parent_b)
+        forward_parents = {}
+        for state_hash, record in closed_f.items():
+            forward_parents[state_hash] = record["parent"]
+
+        backward_parents = {}
+        for state_hash, record in closed_b.items():
+            backward_parents[state_hash] = record["parent"]
+
+        return _reconstruct_mm_path(meet_hash, forward_parents, backward_parents)
 
     while open_f and open_b:
         p_min_f, f_min_f, g_min_f, _ = peek_valid(open_f, closed_f)
@@ -238,8 +244,7 @@ def mm(grid_map, start, goal, epsilon=1):
                 # If already discovered forward and better path found, update it
                 if n_hash in closed_f:
                     if new_g < closed_f[n_hash]["g"]:
-                        closed_f[n_hash]["g"] = new_g
-                        closed_f[n_hash]["parent"] = cur_hash
+                        closed_f[n_hash] = {"g": new_g, "parent": cur_hash}
 
                         n_state = _make_state_from_hash(n_hash)
                         f_val = new_g + manhattan(n_state, goal)
@@ -281,8 +286,7 @@ def mm(grid_map, start, goal, epsilon=1):
                 # If already discovered backward and better path found, update it
                 if n_hash in closed_b:
                     if new_g < closed_b[n_hash]["g"]:
-                        closed_b[n_hash]["g"] = new_g
-                        closed_b[n_hash]["parent"] = cur_hash
+                        closed_b[n_hash] = {"g": new_g, "parent": cur_hash}
 
                         n_state = _make_state_from_hash(n_hash)
                         f_val = new_g + manhattan(n_state, start)
