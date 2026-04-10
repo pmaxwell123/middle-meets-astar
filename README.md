@@ -16,7 +16,7 @@ The project is motivated by the question:
 
 ## Overview
 
-The repository contains code to:
+The repository (https://github.com/pmaxwell123/middle-meets-astar#) contains code to:
 
 - load grid maps from experiment folders
 - run **A\*** and **MM** on each map
