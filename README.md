@@ -35,7 +35,7 @@ The current experiment setup uses map families such as:
 `main.py` iterates through map files, runs A* and MM, computes simulated dovetailing results for several ratios, and writes everything to CSV.
 
 ### Instructions
-1. Install the latest version of matplotlib
+1. Install the latest version of matplotlib, make sure to use python3
 2. Run generate_maps.py
 3. Run main.py
 4. Run analyze_results.py
